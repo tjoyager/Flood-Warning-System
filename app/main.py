@@ -1,12 +1,9 @@
 from fastapi import FastAPI, HTTPException
 from app.models.schemas import TelemetryInput, ResponseMessage
+from app.core.database import get_db_connection
 from datetime import datetime
 
-app = FastAPI(
-    title="Flood Early Warning API",
-    description="Backend untuk menerima dan memproses data sensor mitigasi banjir",
-    version="1.0.0"
-)
+app = FastAPI(title="Flood Early Warning API")
 
 def calculate_alert_level(water_level: float, rainfall: float) -> str:
     if water_level > 250 or rainfall > 100:
@@ -16,23 +13,41 @@ def calculate_alert_level(water_level: float, rainfall: float) -> str:
     else:
         return "Aman"
 
-@app.get("/")
-def read_root():
-    return {"message": "Sistem Backend Mitigasi Banjir Aktif"}
-
 @app.post("/api/v1/telemetry", response_model=ResponseMessage)
 def receive_telemetry(data: TelemetryInput):
+    alert_status = calculate_alert_level(data.water_level_cm, data.rainfall_mm)
+    
+    conn = None
     try:
-        alert_status = calculate_alert_level(data.water_level_cm, data.rainfall_mm)
+        conn = get_db_connection()
+        cursor = conn.cursor()
         
-        print(f"[{datetime.now()}] Menyimpan data dari Sensor {data.sensor_id} ke database...")
+        insert_telemetry_query = """
+            INSERT INTO telemetry_logs (sensor_id, water_level_cm, rainfall_mm)
+            VALUES (%s, %s, %s)
+        """
+        cursor.execute(insert_telemetry_query, (data.sensor_id, data.water_level_cm, data.rainfall_mm))
+        
         if alert_status != "Aman":
-            print(f"[{datetime.now()}] Memicu ALARM WARNING: Status {alert_status}!")
+            insert_alert_query = """
+                INSERT INTO alert_history (sensor_id, alert_level)
+                VALUES (%s, %s)
+            """
+            cursor.execute(insert_alert_query, (data.sensor_id, alert_status))
+            print(f"[{datetime.now()}] ALARM TRIGGERED: {alert_status} for Sensor {data.sensor_id}")
+            
+        conn.commit()
+        cursor.close()
         
         return ResponseMessage(
             status="success",
             alert_level=alert_status,
-            message="Data berhasil diproses dan disimpan"
+            message="Data berhasil diproses dan disimpan ke database"
         )
     except Exception as e:
+        if conn:
+            conn.rollback()
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if conn:
+            conn.close()
