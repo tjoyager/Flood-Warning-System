@@ -51,3 +51,39 @@ def receive_telemetry(data: TelemetryInput):
     finally:
         if conn:
             conn.close()
+
+@app.get("/api/v1/alerts")
+def get_alert_history():
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        select_query = """
+            SELECT id, sensor_id, alert_level, triggered_at 
+            FROM alert_history 
+            ORDER BY triggered_at DESC 
+            LIMIT 10;
+        """
+        cursor.execute(select_query)
+        records = cursor.fetchall()
+        
+        alerts = []
+        for row in records:
+            alerts.append({
+                "id": row[0],
+                "sensor_id": row[1],
+                "alert_level": row[2],
+                "triggered_at": row[3]
+            })
+            
+        return {
+            "status": "success",
+            "data": alerts
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if conn:
+            cursor.close()
+            conn.close()
